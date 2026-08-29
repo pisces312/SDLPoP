@@ -7,6 +7,10 @@
  *      what all of SDLPoP's resource loading is built on).
  *   2. Tell the native layer where that data lives, before SDL_main() runs.
  *   3. Overlay the on-screen controls.
+ *   4. Seed a default SDLPoP.ini (start_fullscreen = true) so the game's own
+ *      Settings > Visuals > "start fullscreen" toggle is ON out of the box.
+ *      The game itself then drives SDL into fullscreen, which triggers
+ *      SDLActivity's immersive handling — no window-style code needed here.
  */
 
 package com.sdlpop.sdlpop;
@@ -33,6 +37,7 @@ public class PoPActivity extends SDLActivity {
 
     private static final String DATA_DIR = "data";
     private static final String MARKER_FILE = "popdata.version";
+    private static final String INI_FILE = "SDLPoP.ini";
 
     /** Implemented in app/src/main/cpp/pop_android.c */
     public static native void nativeSetup(String dataDir);
@@ -47,6 +52,7 @@ public class PoPActivity extends SDLActivity {
 
         try {
             extractGameData();
+            seedDefaultIni();
         } catch (IOException e) {
             Log.e(TAG, "Failed to extract game data", e);
         }
@@ -91,6 +97,23 @@ public class PoPActivity extends SDLActivity {
         }
         for (String entry : entries) {
             copyAssetPath(assetPath + "/" + entry, new File(target, entry));
+        }
+    }
+
+    /**
+     * Copies the bundled default SDLPoP.ini to the app's files dir, but only
+     * if it is not already there.
+     *
+     * The file must NOT be overwritten on later launches: SDLPoP lets an
+     * in-game-menu-generated SDLPoP.cfg override the .ini only while the
+     * .cfg is newer (menu.c load_ingame_settings compares mtimes). Refreshing
+     * the .ini every start would silently reset whatever the user changed in
+     * the in-game menu.
+     */
+    private void seedDefaultIni() throws IOException {
+        File target = new File(getFilesDir(), INI_FILE);
+        if (!target.exists()) {
+            copyAssetFile(INI_FILE, target);
         }
     }
 

@@ -147,6 +147,31 @@ SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
 
 波斯王子是 2D 横版卷轴，tilt 操控既无意义也无校准原点，因此直接关闭，不做设置项。
 
+### 5. 预置 `SDLPoP.ini`：零源码改动地改默认设置（如 start fullscreen）
+
+游戏内菜单的「Settings → Visuals → start fullscreen」默认 off（`data.h:719`，仅 `__PSP__` 平台为 1），
+而 SDLPoP 不调 `SDL_SetWindowFullscreen`，SDL 的 immersive 通道不会触发 → Android 顶部状态栏可见。
+
+改默认值的正道是利用上游**自己的配置系统**，完全不改 C 源码：
+
+```
+配置优先级（menu.c load_ingame_settings:2423）：
+  SDLPoP.cfg（游戏内菜单保存，含 exe CRC 校验，无法预造）
+  > SDLPoP.ini（手写文本，[General] section）
+  ——但仅当 .cfg 比 .ini 新；.ini 更新则 .ini 胜出
+```
+
+- `locate_file()`（seg009.c:137）先查当前目录——我们已 `chdir` 到 `filesDir`，所以把
+  `SDLPoP.ini` 放到 `filesDir` 根即可被读到（放 `data/` 子目录无效）。
+- 做法：APK `assets/` 根打包一份 `SDLPoP.ini`（内容 `[General] start_fullscreen = true`），
+  `PoPActivity.seedDefaultIni()` **仅在文件不存在时**复制到 `filesDir` 根。
+- **不能每次启动覆盖**：一旦用户在游戏内改过设置（生成 `.cfg`），刷新 `.ini` 的 mtime 会让
+  `.ini` 反超 `.cfg`，静默重置用户设置。
+- 生效链路：`start_fullscreen=1` → 窗口创建带 `SDL_WINDOW_FULLSCREEN_DESKTOP`（seg009.c:2576）
+  → SDL Android 后端 `Android_SetWindowFullscreen` → `COMMAND_CHANGE_WINDOW_STYLE`
+  → SDLActivity 设 immersive sticky flags 并记 `mFullscreenModeActive`（focus 恢复由 SDL 自管）。
+  不需要任何 Java 层 window-style 代码。
+
 ---
 
 ## 四、依赖与前置条件

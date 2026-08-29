@@ -8,8 +8,18 @@
  * scancodes (AKEYCODE_DPAD_* -> SDL_SCANCODE_*, AKEYCODE_SHIFT_LEFT ->
  * SDL_SCANCODE_LSHIFT, ...).
  *
- * Multi-touch is supported, so "Up + Left" (running jump) works naturally by
- * holding two fingers down at once.
+ * Layout (see docs/SDLPoP-Input-Logic_2026-08-29.md for the game mechanics):
+ *   Left thumb : LEFT / RIGHT  - held = run (the game has no walk speed;
+ *                 precise single steps are done by holding Shift + direction,
+ *                 i.e. the game's native safe_step).
+ *   Right thumb: UP (▲) / DOWN (▼) column with Shift and Enter besides it;
+ *                 Esc tucked into the top-right corner. The arrows match the
+ *                 key semantics exactly: UP is jump/climb-up/menu-up, DOWN is
+ *                 duck/hang/menu-down, so a directional glyph is the most
+ *                 accurate label.
+ *
+ * Multi-touch is supported, so combos like "Shift + direction" (precise step)
+ * or "direction + UP" (standing jump) work naturally by holding two fingers.
  */
 
 package com.sdlpop.sdlpop;
@@ -35,39 +45,44 @@ public class VirtualPad extends View {
     private static final class PadButton {
         final int keyCode;
         final String label;
-        final float cxFraction;   // centre x, fraction of view width
-        final float cyFraction;   // centre y, fraction of view height
-        int cx;                   // centre x in pixels
+        final float cxFraction;      // centre x, fraction of view width
+        final float cyFraction;      // centre y, fraction of view height
+        final float radiusFraction;  // radius, fraction of min(width, height)
+        int cx;                      // centre x in pixels
         int cy;
         int radius;
 
-        PadButton(int keyCode, String label, float cxFraction, float cyFraction) {
+        PadButton(int keyCode, String label, float cxFraction, float cyFraction,
+                  float radiusFraction) {
             this.keyCode = keyCode;
             this.label = label;
             this.cxFraction = cxFraction;
             this.cyFraction = cyFraction;
+            this.radiusFraction = radiusFraction;
         }
     }
 
     /**
-     * Button layout (fraction of view size):
-     *   D-pad centre at x=0.13, y=0.72  (lower-left)
-     *   Right-side action buttons are arranged diagonally (lower-right)
+     * Button layout (fractions of view size; radius is a fraction of
+     * min(width, height) so buttons keep their relative size in landscape).
      *
-     * The D-pad arms are set in onSizeChanged so that adjacent diagonal buttons
-     * do NOT overlap (centre distance >= 2*radius).
+     * Left side  : two large direction buttons (LEFT / RIGHT).
+     * Right side : UP (▲) / DOWN (▼) column with Shift and Enter besides
+     *              it; Esc tucked into the top-right corner.
+     *
+     * Centres are chosen so that no two buttons overlap:
+     * e.g. up/down are 0.22h apart with a combined radius of 0.18h.
      */
     private final PadButton[] buttons = {
-            // D-pad (indices 0..3) – cxFraction/cyFraction are the shared centre
-            new PadButton(KeyEvent.KEYCODE_DPAD_UP,    "\u25B2",   0.13f, 0.72f),
-            new PadButton(KeyEvent.KEYCODE_DPAD_DOWN,  "\u25BC",   0.13f, 0.72f),
-            new PadButton(KeyEvent.KEYCODE_DPAD_LEFT,  "\u25C0",   0.13f, 0.72f),
-            new PadButton(KeyEvent.KEYCODE_DPAD_RIGHT, "\u25B6",   0.13f, 0.72f),
-            // Action buttons
-            new PadButton(KeyEvent.KEYCODE_SHIFT_LEFT, "Shift",    0.92f, 0.52f),
-            new PadButton(KeyEvent.KEYCODE_SPACE,      "\u21E7",   0.78f, 0.68f),  // jump = Space
-            new PadButton(KeyEvent.KEYCODE_ENTER,      "\u23CE",   0.92f, 0.78f),  // enter = pickup/confirm
-            new PadButton(KeyEvent.KEYCODE_ESCAPE,     "Esc",      0.78f, 0.88f),  // escape = menu
+            // Left thumb: movement
+            new PadButton(KeyEvent.KEYCODE_DPAD_LEFT,  "\u25C0", 0.115f, 0.78f, 0.105f),
+            new PadButton(KeyEvent.KEYCODE_DPAD_RIGHT, "\u25B6", 0.265f, 0.78f, 0.105f),
+            // Right thumb: actions
+            new PadButton(KeyEvent.KEYCODE_DPAD_UP,    "\u25B2", 0.875f, 0.67f, 0.090f), // jump/climb-up/menu-up
+            new PadButton(KeyEvent.KEYCODE_DPAD_DOWN,  "\u25BC", 0.875f, 0.89f, 0.090f), // duck/hang/menu-down
+            new PadButton(KeyEvent.KEYCODE_SHIFT_LEFT, "Shift",  0.775f, 0.78f, 0.090f), // step/climb/fight
+            new PadButton(KeyEvent.KEYCODE_ENTER,      "\u23CE", 0.940f, 0.78f, 0.075f), // confirm
+            new PadButton(KeyEvent.KEYCODE_ESCAPE,     "Esc",    0.940f, 0.10f, 0.060f), // menu
     };
 
     /** How many pointers currently press each button (indexed like buttons). */
@@ -92,38 +107,17 @@ public class VirtualPad extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-
-        int radius = (int) (Math.min(w, h) * 0.09f);
-        // Arm length from D-pad centre to each direction button centre.
-        // With arm = 1.55 * radius, diagonal neighbours are sqrt(2)*1.55 r ≈ 2.19 r
-        // apart, which is > 2r, so no overlap.
-        int arm = (int) (radius * 1.55f);
-
-        // D-pad: buttons 0..3 share one centre and are offset by `arm`.
-        int dx = (int) (w * buttons[0].cxFraction);
-        int dy = (int) (h * buttons[0].cyFraction);
-        buttons[0].cx = dx;
-        buttons[0].cy = dy - arm;   // UP
-        buttons[1].cx = dx;
-        buttons[1].cy = dy + arm;   // DOWN
-        buttons[2].cx = dx - arm;
-        buttons[2].cy = dy;         // LEFT
-        buttons[3].cx = dx + arm;
-        buttons[3].cy = dy;         // RIGHT
-
-        for (int i = 0; i < buttons.length; i++) {
-            buttons[i].radius = radius;
-            if (i >= 4) {
-                buttons[i].cx = (int) (w * buttons[i].cxFraction);
-                buttons[i].cy = (int) (h * buttons[i].cyFraction);
-            }
+        int minDim = Math.min(w, h);
+        for (PadButton b : buttons) {
+            b.cx = (int) (w * b.cxFraction);
+            b.cy = (int) (h * b.cyFraction);
+            b.radius = (int) (minDim * b.radiusFraction);
         }
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-
         for (int i = 0; i < buttons.length; i++) {
             PadButton b = buttons[i];
             fillPaint.setAlpha(holds[i] > 0 ? ALPHA_PRESSED : ALPHA_IDLE);
