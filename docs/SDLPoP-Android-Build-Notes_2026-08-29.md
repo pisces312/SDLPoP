@@ -106,8 +106,46 @@ SDL scancode（已核实：`AKEYCODE_DPAD_UP→SDL_SCANCODE_UP`、`AKEYCODE_SHIF
 
 → **Java 虚拟按键直接注入，C 层零改动**，且多指同按天然支持「上+左」跑跳。
 
-`VirtualPad` 为最小版：左下十字方向键 + 右侧 `Shift` / `⏎(Space)` / `Esc`，半透明覆盖层，
-按屏幕尺寸比例定位。
+`VirtualPad` 为最小版：左下十字方向键 + 右侧 `Shift` / `跳(Space)` / `⏎(Enter)` / `Esc`，
+半透明覆盖层，按屏幕尺寸比例定位。
+
+### 4. 必须关掉「加速度计当摇杆」：否则虚拟按键会失效
+
+这是**真机验证后才发现**的隐藏适配点，也是三个诡异现象的共同根因。
+
+完整因果链：
+
+```
+SDL 默认 SDL_HINT_ACCELEROMETER_AS_JOYSTICK = "1"（src/joystick/android/SDL_sysjoystick.c:469）
+   ↓  加速度计被注册成一个 3-axis joystick
+   ↓  读数 = 重力加速度（单位 g），clamp 到 ±1.0 后 ×32767 → Sint16
+SDLPoP 原生支持手柄，且 config.h:353 开了 USE_AUTO_INPUT_MODE
+   ↓  joystick_threshold 默认 8000（满量程 32767）
+   ↓  sin(θ)·32767 > 8000  ⇒ θ ≈ 14°，手机倾斜 14° 即越阈
+seg009.c 中 is_joyst_mode = 1 / is_keyboard_mode = 0（两者互斥，seg009.c:985）
+   ↓
+键盘方向输入被忽略 → 虚拟按键「失效」
+```
+
+对应到用户可见的三个现象：
+
+| 现象 | 机制 |
+|---|---|
+| 平放桌面时按键好用 | z≈1g（32767），x/y≈0，不越阈 → 不切手柄模式 |
+| 拿在手里变成「陀螺仪控制」，按键失效 | 握持必有倾角，越阈 → 切入手柄模式，键盘方向被吞 |
+| 左右倾斜触发角色左右走 | 加速度计 x 轴被当成左摇杆 X 轴 |
+
+**修复**：在 `pop_android.c` 的 `nativeSetup()` 里加一行
+
+```c
+SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+```
+
+必须在 `SDL_Init(SDL_INIT_JOYSTICK)`（或首次 `SDL_NumJoysticks()` 惰性初始化）之前设置，
+`onCreate()` → `nativeSetup()` 早于 SDL 主线程启动，时序安全。已核实 Android 端
+**只有加速度计**这一种虚拟 joystick 会自动注册（其余来自真实输入设备）。
+
+波斯王子是 2D 横版卷轴，tilt 操控既无意义也无校准原点，因此直接关闭，不做设置项。
 
 ---
 
@@ -172,6 +210,10 @@ Release 构建需要签名凭据，**只从环境变量读取**（不硬编码�
 | 5 | `fatal error: 'sdl_compat.h' file not found` | 从 sdlpal 拷来的 `SDL_stbimage.h` 面向 SDL3，依赖其兼容层 | 改为直接 `#include <SDL.h>`（本移植用原生 SDL2） |
 | 6 | sdlpal 的 `3rd/SDL` 是 **SDL3**，不能用 | 版本不同 | 用本机已有的 SDL2 2.32.8 源码；只照抄 sdlpal 的 Gradle/Java/NDK 配置，不抄 SDL 部分 |
 | 7 | 早期 `SDLPoP-Android` 脚手架是空壳 | 当时的复制未真正落地 | 推倒重建为同仓 `android/`，未沿用 |
+| 8 | **方向键视觉重叠、对角区命中错方向** | 臂长 `arm=1.15r`；对角中心距 `√2·arm≈1.63r < 2r`（半径和） | `arm` 加大到 `1.55r`（对角距 `2.19r > 2r`，无重叠）；`hitTest` 改为返回**最近**命中按钮，消除重叠区歧义 |
+| 9 | **按键粘滞**：角色一直走、菜单条目循环扫过 | 竖屏→横屏 Activity 重建，旧 `VirtualPad` 销毁时未释放按键，SDL 键盘状态卡在「按下」 | `onDetachedFromWindow()` 强制释放；`ACTION_UP` 后若 `pointerButtons` 已空但 `holds[]` 仍非 0 则全量兜底释放（`releaseAllIfEmpty`）；坐标越界（手指滑出屏幕）视作释放 |
+| 10 | **开了系统自动旋转后变竖屏** | `sensorLandscape` 允许传感器在左/右横屏间翻转，部分 ROM 行为异常 | 改 `landscape`：**固定左横屏**，完全忽略传感器 |
+| 11 | **倾斜手机触发方向键、握持时虚拟按键失效** | 见第三节第 4 点（加速度计被注册成 joystick） | `SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0")` |
 
 ---
 
@@ -182,8 +224,9 @@ Release 构建需要签名凭据，**只从环境变量读取**（不硬编码�
   结果是 CRC=0。仅在保存设置时调用，无实际影响。
 - **仅 `arm64-v8a`**：如需模拟器调试，在 `Application.mk` 加 `x86_64`（SDL2 需重新编译）。
 - **`3rd/SDL` 不在版本库**：新克隆必须先跑 `android/setup.ps1`。
-- 遗留：`D:\3rd-party-projects\SDLPoP-Android`（80 MB）是早期废弃脚手架，含一份重复的 SDL2 源码，
-  可安全删除（当前工程不依赖它）。
+- **屏幕方向固定为左横屏**（`landscape`）：不受系统「自动旋转」与传感器影响，不会因旋转触发
+  Activity 重建。
+- **加速度计不作为输入设备**：无 tilt 操控，也不提供开关（2D 横版无实用价值）。
 
 ---
 

@@ -33,7 +33,6 @@ mods/*/
 
 # Shared objects (inc. Windows DLLs)
 *.dll
-*.so
 *.so.*
 *.dylib
 
@@ -102,3 +101,7 @@ screenshots/
 # Gradle project cache and machine-local SDK path
 .gradle/
 local.properties
+
+# Prebuilt Android native libs committed to the repo (same copies as packaged
+# into the debug APK; *.so is not ignored anymore)
+# android/prebuilt/arm64-v8a/{libSDL2.so,libmain.so}
