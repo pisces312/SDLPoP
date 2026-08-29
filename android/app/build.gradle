@@ -1,0 +1,93 @@
+apply plugin: 'com.android.application'
+
+// Game data lives in the repository root (SDLPoP/data) and is NOT duplicated
+// into the Android module. It is copied into a generated assets folder at build
+// time, then extracted to internal storage on first launch (APK assets are not
+// reachable with fopen()).
+def popAssetsDir = new File(layout.buildDirectory.get().asFile, "generated/pop_assets")
+
+tasks.register('copyPopData', Copy) {
+    from("${rootDir}/../data")
+    into(new File(popAssetsDir, "data"))
+}
+
+android {
+    namespace "com.sdlpop.sdlpop"
+
+    lint {
+        checkReleaseBuilds false
+    }
+
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.sdlpop.sdlpop"
+        minSdk 21
+        targetSdk 36
+        ndkVersion "27.3.13750724"
+        externalNativeBuild {
+            ndkBuild {
+                arguments "NDK_APPLICATION_MK:=src/main/cpp/Application.mk", "-j"
+                abiFilters "arm64-v8a"
+            }
+        }
+    }
+
+    signingConfigs {
+        release {
+            // Credentials come from environment variables only - never hardcoded.
+            def storeFilePath = System.getenv('KEY_STORE')
+            def storePasswordVal = System.getenv('KEY_STORE_PASSWORD')
+            def keyAliasVal = System.getenv('KEY_ALIAS')
+            def keyPasswordVal = System.getenv('KEY_PASSWORD')
+            if (storeFilePath != null && new File(storeFilePath).exists()) {
+                storeFile file(storeFilePath)
+                storePassword storePasswordVal
+                keyAlias keyAliasVal
+                keyPassword keyPasswordVal
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.txt'
+            signingConfig signingConfigs.release
+        }
+        debug {
+            jniDebuggable true
+            externalNativeBuild {
+                ndkBuild {
+                    cFlags "-DDEBUG", "-g"
+                    cppFlags "-DDEBUG", "-g"
+                }
+            }
+        }
+    }
+
+    externalNativeBuild {
+        ndkBuild {
+            path 'src/main/cpp/Android.mk'
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs += 'src/main/java'
+            assets.srcDirs += popAssetsDir
+        }
+    }
+}
+
+// Make every asset-merge task wait for the game data copy.
+tasks.configureEach { task ->
+    if (task.name.startsWith("merge") && task.name.endsWith("Assets")) {
+        task.dependsOn 'copyPopData'
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+}

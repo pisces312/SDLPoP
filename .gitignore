@@ -93,3 +93,12 @@ screenshots/
 !/prince.exe
 !/SDL2.dll
 !/SDL2_image.dll
+
+# --- Android -----------------------------------------------------------------
+# SDL2 is compiled from source for Android. The source tree (~80 MB) is not
+# committed; run android/setup.ps1 once after cloning to fetch it.
+/3rd/SDL/
+
+# Gradle project cache and machine-local SDK path
+.gradle/
+local.properties
